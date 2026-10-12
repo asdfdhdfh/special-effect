@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="tr" class="inintro">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5">
+<meta name="theme-color" content="#000000">
+<meta name="description" content="Karanlıkta atan bir ışık.">
+<title>Kalp</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300&family=Space+Grotesk:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#f4f1ee; --dim:#8a8086;
+  --line:rgba(255,255,255,.09);
+  --red:#ff0033; --pink:#ff7ba8;
+  --ease:cubic-bezier(.16,1,.3,1);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+html.inintro,html.inintro body{overflow:hidden;height:100%}
+body{
+  background:#000;color:var(--ink);
+  font-family:'Space Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  font-weight:300;line-height:1.75;letter-spacing:.01em;
+  overflow-x:hidden;-webkit-font-smoothing:antialiased;
+}
+canvas#fx{position:fixed;inset:0;width:100%;height:100%;z-index:1;display:block;pointer-events:none}
+::-webkit-scrollbar{width:8px}
+::-webkit-scrollbar-track{background:#000}
+::-webkit-scrollbar-thumb{background:linear-gradient(var(--red),#5a0016);border-radius:9px}
+
+#veil{display:none}
+
+#glow{position:fixed;width:520px;height:520px;z-index:3;pointer-events:none;border-radius:50%;
+  transform:translate(-50%,-50%);opacity:0;transition:opacity .4s;
+  background:radial-gradient(circle,rgba(255,0,51,.10),rgba(255,0,51,.045) 34%,transparent 66%)}
+@media (pointer:coarse){#glow{display:none}}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}
+  html{scroll-behavior:auto}
+}
+</style>
+</head>
+<body>
+
+<div id="glow"></div>
+<canvas id="fx"></canvas>
+
+<script>
+(function(){
+'use strict';
+
+/* ═══════════════════════════════════════════════════════════
+   ZAMAN ÇİZELGESİ
+   ═══════════════════════════════════════════════════════════ */
+var T_EMPTY=0.70;   // 1) boş siyah ekran — hiçbir şey yok
+var STEP   =1.20;    // kalemle çizilen kalpler arası fark
+var DRAW   =1.70;    // bir kalemin çizim süresi
+var NR     =6;       // kaç kalp
+var T_PEN  =T_EMPTY+(NR-1)*STEP+DRAW;   // kalemle çizim bitti
+var T_FORM =2.20;    // 3) noktalar tek tek HIZLA kalbi kurar
+var T_ALIVE=3.50;    // 4) animasyon YAVAŞÇA devreye girer
+var LIVE   =T_PEN+T_FORM+T_ALIVE+1.30;
+
+var TAU=Math.PI*2;
+function clamp(v,a,b){return v<a?a:v>b?b:v}
+function rnd(a,b){return a+Math.random()*(b-a)}
+function lerp(a,b,t){return a+(b-a)*t}
+function eOutCubic(t){return 1-Math.pow(1-t,3)}
+function eOutQuint(t){return 1-Math.pow(1-t,5)}
+function eInOutSine(t){return -(Math.cos(Math.PI*t)-1)/2}
+function eOutBack(t){var c1=1.35,c3=c1+1;return 1+c3*Math.pow(t-1,3)+c1*Math.pow(t-1,2)}
+
+/* ═══════════════════════════════════════════════════════════
+   KALP EĞRİSİ   x = 16sin³t · y = 13cos t −5cos2t −2cos3t −cos4t
+   Merkez (0, −3)  ·  eğri koordinatları ±16 birim → ölçek = px/16
+   ═══════════════════════════════════════════════════════════ */
+var CY=-3, HN=560, HP=[];
+for(var i=0;i<=HN;i++){
+  var t=i/HN*TAU, st=Math.sin(t);
+  HP.push([16*st*st*st, 13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t)-CY]);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SPRITE'LAR (hepsi bir kez pişirilir → kare başına 0 gradient)
+   ═══════════════════════════════════════════════════════════ */
+var PAL=[[255,14,48],[255,40,78],[255,80,118],[255,140,175],[255,196,216]];
+function dotSprite(col){
+  var S=64,cv=document.createElement('canvas');cv.width=cv.height=S;
+  var g=cv.getContext('2d');
+  var gr=g.createRadialGradient(S/2,S/2,0,S/2,S/2,S/2);
+  /* sıkı çekirdek + hızlı düşüş → noktalar belirgin, bulut değil */
+  gr.addColorStop(0.00,'rgba('+col[0]+','+col[1]+','+col[2]+',1)');
+  gr.addColorStop(0.14,'rgba('+col[0]+','+col[1]+','+col[2]+',0.88)');
+  gr.addColorStop(0.30,'rgba('+col[0]+','+col[1]+','+col[2]+',0.34)');
+  gr.addColorStop(0.52,'rgba('+col[0]+','+col[1]+','+col[2]+',0.075)');
+  gr.addColorStop(0.78,'rgba('+col[0]+','+col[1]+','+col[2]+',0.012)');
+  gr.addColorStop(1.00,'rgba('+col[0]+','+col[1]+','+col[2]+',0)');
+  g.fillStyle=gr;g.fillRect(0,0,S,S);return cv;
+}
+var DOT=PAL.map(dotSprite);
+function glowSprite(col){
+  var S=128,cv=document.createElement('canvas');cv.width=cv.height=S;
+  var g=cv.getContext('2d');
+  var gr=g.createRadialGradient(S/2,S/2,0,S/2,S/2,S/2);
+  gr.addColorStop(0.00,'rgba('+col[0]+','+col[1]+','+col[2]+',0.85)');
+  gr.addColorStop(0.18,'rgba('+col[0]+','+col[1]+','+col[2]+',0.40)');
+  gr.addColorStop(0.50,'rgba('+col[0]+','+col[1]+','+col[2]+',0.10)');
+  gr.addColorStop(1.00,'rgba('+col[0]+','+col[1]+','+col[2]+',0)');
+  g.fillStyle=gr;g.fillRect(0,0,S,S);return cv;
+}
+var GLOW=[glowSprite([255,70,110]),glowSprite([255,175,205])];
+
+/* gül yaprağı — 4 varyant, bir kez çizilir */
+var PW=16, PH=22;                       // mantıksal yarı ölçüler
+var PETS=(function(){
+  var out=[];
+  for(var v=0;v<4;v++){
+    var W=128,H=176,cv=document.createElement('canvas');cv.width=W;cv.height=H;
+    var g=cv.getContext('2d');
+    g.translate(W/2,H/2); g.scale(4,4);
+    var grd=g.createLinearGradient(0,-PH,0,PH);
+    if(v&1){
+      grd.addColorStop(0,'#ffd0e0'); grd.addColorStop(.45,'#ff3a68'); grd.addColorStop(1,'#7d0324');
+    }else{
+      grd.addColorStop(0,'#ff9ab6'); grd.addColorStop(.45,'#e01c48'); grd.addColorStop(1,'#5c0216');
+    }
+    g.beginPath();
+    g.moveTo(0,-PH);
+    g.bezierCurveTo(PW,-PH*0.42,PW*0.72,PH*0.72,0,PH);
+    g.bezierCurveTo(-PW*0.72,PH*0.72,-PW,-PH*0.42,0,-PH);
+    g.fillStyle=grd; g.fill();
+    g.beginPath(); g.moveTo(0,-PH*0.86);
+    g.quadraticCurveTo(PW*0.10,-PH*0.05,0,PH*0.86);
+    g.strokeStyle='rgba(255,208,226,.5)'; g.lineWidth=0.9; g.stroke();
+    out.push(cv);
+  }
+  return out;
+})();
+
+/* ═══════════════════════════════════════════════════════════════════
+   ◆◆◆ EKLENTİ BLOĞU — BAŞLANGIÇ ◆◆◆
+   ─────────────────────────────────────────────────────────────────
+   Bu blok TAMAMEN bağımsızdır.
+   • Tek tek kapatmak için → PLUG bayraklarını false yap
+   • Hepsini birden kaldırmak için → bu bloğu (başlangıç↔bitiş) sil
+   Kaldırılan eklentiler ana döngüde "if(PLUG.x)" korumasıyla atlanır.
+   ═══════════════════════════════════════════════════════════════════ */
+
+var PLUG = {
+  fog          : true,   // sis / buhar katmanı
+  constellation: false,  // yıldız bağlantı çizgileri  ← kapatıldı (görsel gürültü)
+  dandelion    : true,   // ışık tohumları
+  buds         : true,   // uçan gül tomurcukları
+  embers       : true,   // kalp çevresi korona kıvılcımları
+  trails       : false,  // uçuşan ışık izleri         ← kapatıldı (görsel gürültü)
+  fireflies    : true,   // ateş böcekleri
+  flare        : true,   // anamorphic lens flare
+  quality      : 1       // 0.6 = düşük (mobil), 1 = tam
+};
+
+/* --- eklenti sprite'ları (bir kez pişirilir) --- */
+function fogSprite(){
+  var S=256,cv=document.createElement('canvas');cv.width=cv.height=S;
+  var g=cv.getContext('2d');
+  for(var i=0;i<8;i++){
+    var a=Math.random()*TAU,d=Math.random()*S*0.24;
+    var x=S/2+Math.cos(a)*d,y=S/2+Math.sin(a)*d,r=S*(0.15+Math.random()*0.22);
+    var gr=g.createRadialGradient(x,y,0,x,y,r);
+    gr.addColorStop(0,'rgba(255,66,108,0.085)');
+    gr.addColorStop(.5,'rgba(170,26,66,0.038)');
+    gr.addColorStop(1,'rgba(110,0,40,0)');
+    g.fillStyle=gr;g.beginPath();g.arc(x,y,r,0,TAU);g.fill();
+  }
+  return cv;
+}
+var FOGSPR=fogSprite();
+function budSprite(){
+  var S=72,cv=document.createElement('canvas');cv.width=cv.height=S;
+  var g=cv.getContext('2d');g.translate(S/2,S/2*0.82);
+  g.strokeStyle='rgba(52,96,58,.6)';g.lineWidth=1.8;g.lineCap='round';
+  g.beginPath();g.moveTo(0,S*0.30);g.quadraticCurveTo(2,S*0.42,-1,S*0.56);g.stroke();
+  var gr=g.createRadialGradient(-S*.07,-S*.12,1,0,0,S*.34);
+  gr.addColorStop(0,'#ff9ab6');gr.addColorStop(.45,'#e8244f');gr.addColorStop(1,'#5f0216');
+  g.beginPath();g.ellipse(0,0,S*.21,S*.30,0,0,TAU);g.fillStyle=gr;g.fill();
+  g.strokeStyle='rgba(255,196,214,.5)';g.lineWidth=1;
+  for(var k=0;k<3;k++){
+    g.beginPath();g.ellipse(0,S*.02,S*.055+k*S*.055,S*.10+k*S*.062,.5,0,TAU);g.stroke();
+  }
+  return cv;
+}
+var BUDSPR=budSprite();
+
+/* --- eklenti durum dizileri --- */
+var fogPuffs=[],CONS=[],seeds=[],buds=[],embers=[],motes=[],flies=[],flare=null,flareNext=4;
+
+function initPlugins(){
+  var q=PLUG.quality;
+  fogPuffs.length=0;
+  var fn=Math.round(5*q);
+  for(var i=0;i<fn;i++)fogPuffs.push({x:rnd(0,1),y:rnd(0,1),s:rnd(.40,.90),
+    a:rnd(.05,.13),vx:rnd(-.006,.006),vy:rnd(-.004,.004),ph:rnd(0,TAU)});
+
+  CONS=[[[.10,.16],[.21,.25],[.30,.14],[.25,.35],[.12,.37],[.19,.15]],
+        [[.70,.12],[.81,.22],[.75,.35],[.65,.26]],
+        [[.44,.60],[.55,.56],[.64,.67],[.52,.77],[.42,.71]],
+        [[.86,.56],[.93,.67],[.83,.79],[.90,.45]]];
+
+  seeds.length=0;var sn=Math.round(16*q);
+  for(i=0;i<sn;i++)seeds.push(mkSeed(true));
+  buds.length=0;var bn=Math.round(7*q);
+  for(i=0;i<bn;i++)buds.push(mkBud(true));
+  embers.length=0;motes.length=0;flies.length=0;flare=null;flareNext=rnd(4,8);
+}
+function mkSeed(f){return{x:rnd(0,W),y:f?rnd(0,H):rnd(-70,-10),vx:rnd(10,34),vy:rnd(4,15),
+  r:rnd(.85,1.75),spin:rnd(-1.1,1.1),ang:rnd(0,TAU),sway:rnd(.6,1.7),
+  amp:rnd(14,44),ph:rnd(0,TAU),al:rnd(.25,.6),life:1,dec:rnd(.004,.009)}}
+function mkBud(f){return{x:rnd(0,W),y:f?rnd(0,H):rnd(-80,-10),s:rnd(.28,.60),
+  vy:rnd(10,26),vr:rnd(-.45,.45),rot:rnd(0,TAU),sway:rnd(.5,1.4),
+  amp:rnd(12,34),ph:rnd(0,TAU),al:rnd(.32,.78)}}
+function mkEmber(){
+  var a=Math.random()*TAU,rr=(6.5+Math.random()*9.5)*S;
+  return{x:cx+Math.cos(a)*rr,y:cy+Math.sin(a)*rr,vx:rnd(-14,14),vy:rnd(-46,-20),
+    r:rnd(.5,1.5),life:1,dec:rnd(.15,.29),ph:rnd(0,TAU),sway:rnd(1,3),pal:(Math.random()*3)|0};
+}
+function mkMote(){return{x:rnd(-120,W+120),y:rnd(0,H),vx:rnd(70,200)*(Math.random()<.5?-1:1),
+  vy:rnd(-22,22),len:rnd(30,95),r:rnd(.7,1.7),al:rnd(.16,.46),hue:Math.random()}}
+function mkFly(){return{x:rnd(0,W),y:rnd(0,H),tx:rnd(0,W),ty:rnd(0,H),
+  vx:rnd(-1,1),vy:rnd(-1,1),sp:rnd(.10,.24),r:rnd(1.2,2.5),ph:rnd(0,TAU),trail:[]}}
+
+/* --- 1) SİS / BUHAR --- */
+function drawFog(t,a){
+  if(!PLUG.fog||a<=0)return;
+  ctx.globalCompositeOperation='lighter';
+  for(var i=0;i<fogPuffs.length;i++){
+    var f=fogPuffs[i];
+    var x=(f.x+Math.sin(t*.055+f.ph)*.05)*W;
+    var y=(f.y+t*f.vy)%1; if(y<0)y+=1; y*=H;
+    var w=W*f.s,h=H*f.s*.82;
+    ctx.globalAlpha=f.a*a*(.6+.4*Math.sin(t*.22+f.ph));
+    ctx.drawImage(FOGSPR,x-w/2,y-h/2,w,h);
+  }
+  ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
+}
+/* --- 2) KONSTELASYON --- */
+function drawCons(t,a){
+  if(!PLUG.constellation||a<=0)return;
+  ctx.lineCap='round';
+  for(var g=0;g<CONS.length;g++){
+    var G=CONS[g], pulse=.32+.32*Math.sin(t*.5+g*1.7);
+    ctx.strokeStyle='rgba(255,88,132,'+(a*pulse*.28)+')';
+    ctx.lineWidth=1;ctx.beginPath();
+    for(var i=0;i<G.length-1;i++){
+      ctx.moveTo(G[i][0]*W,G[i][1]*H);
+      ctx.lineTo(G[i+1][0]*W,G[i+1][1]*H);
+      if(i===1&&G.length>3)ctx.lineTo(G[3][0]*W,G[3][1]*H);
+    }
+    ctx.stroke();
+    ctx.globalCompositeOperation='lighter';
+    for(i=0;i<G.length;i++){
+      var nx=G[i][0]*W,ny=G[i][1]*H;
+      var tw=.35+.65*Math.abs(Math.sin(t*.85+i*1.3+g));
+      var r=8+6*tw;
+      ctx.globalAlpha=a*tw*.55;
+      ctx.drawImage(GLOW[1],nx-r,ny-r,r*2,r*2);
+    }
+    ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
+  }
+}
+/* --- 3) IŞIK TOHUMLARI --- */
+function drawSeeds(t,dt,a){
+  if(!PLUG.dandelion||a<=0)return;
+  for(var i=seeds.length-1;i>=0;i--){
+    var s=seeds[i];
+    s.x+=s.vx*dt+Math.sin(t*s.sway+s.ph)*s.amp*dt;
+    s.y+=s.vy*dt;s.ang+=s.spin*dt;s.life-=s.dec*dt;
+    if(s.y>H+50||s.life<=0||s.x<-140||s.x>W+140){seeds[i]=mkSeed(false);continue}
+    var f=Math.min(1,s.life*2.5)*a*s.al;
+    ctx.save();ctx.translate(s.x,s.y);ctx.rotate(s.ang);
+    ctx.globalCompositeOperation='lighter';
+    var r=s.r*6;ctx.globalAlpha=f*.95;
+    ctx.drawImage(GLOW[1],-r,-r,r*2,r*2);
+    var r2=s.r*2.1;ctx.globalAlpha=f;
+    ctx.drawImage(DOT[3],-r2,-r2,r2*2,r2*2);
+    ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
+    ctx.restore();
+  }
+}
+/* --- 4) UÇAN GÜL TOMURCUKLARI --- */
+function drawBuds(t,dt,a){
+  if(!PLUG.buds||a<=0)return;
+  for(var i=buds.length-1;i>=0;i--){
+    var b=buds[i];
+    b.y+=b.vy*dt;b.x+=Math.sin(t*b.sway+b.ph)*b.amp*dt;b.rot+=b.vr*dt;
+    if(b.y>H+80||b.x<-90||b.x>W+90){buds[i]=mkBud(false);continue}
+    var sz=b.s*46;
+    ctx.globalAlpha=b.al*a*(.7+.3*Math.sin(t*1.4+b.ph));
+    ctx.save();ctx.translate(b.x,b.y);ctx.rotate(b.rot);
+    ctx.drawImage(BUDSPR,-sz/2,-sz*.62,sz,sz*1.24);
+    ctx.restore();ctx.globalAlpha=1;
+  }
+}
+/* --- 5) KORONA KIVILCIMLARI --- */
+function drawEmbers(t,dt,a){
+  if(!PLUG.embers||a<=0)return;
+  var cap=Math.round(46*PLUG.quality);
+  while(embers.length<cap&&Math.random()<dt*26)embers.push(mkEmber());
+  ctx.globalCompositeOperation='lighter';
+  for(var i=embers.length-1;i>=0;i--){
+    var e=embers[i];
+    e.vy-=7*dt;
+    e.x+=e.vx*dt+Math.sin(t*e.sway+e.ph)*11*dt;
+    e.y+=e.vy*dt;e.life-=e.dec*dt;
+    if(e.life<=0||e.y<-50){embers.splice(i,1);continue}
+    ctx.globalAlpha=e.life*.5*a;
+    var r=e.r*4.5;
+    ctx.drawImage(DOT[e.pal],e.x-r,e.y-r,r*2,r*2);
+  }
+  ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
+}
+/* --- 6) UÇUŞAN IŞIK İZLERİ --- */
+function drawTrails(t,dt,a){
+  if(!PLUG.trails||a<=0)return;
+  var cap=Math.round(16*PLUG.quality);
+  while(motes.length<cap)motes.push(mkMote());
+  ctx.globalCompositeOperation='lighter';ctx.lineCap='round';
+  for(var i=0;i<motes.length;i++){
+    var m=motes[i];
+    m.x+=m.vx*dt;m.y+=m.vy*dt;
+    if(m.x<-180)m.x=W+160;else if(m.x>W+180)m.x=-160;
+    if(m.y<-40)m.y=H+20;else if(m.y>H+40)m.y=-20;
+    var l=Math.hypot(m.vx,m.vy)||1,tx=m.vx/l*m.len,ty=m.vy/l*m.len;
+    var col=m.hue<.5?'255,150,190':'255,78,128';
+    for(var k=0;k<3;k++){
+      var f0=k/3,f1=(k+1)/3;
+      ctx.strokeStyle='rgba('+col+','+(m.al*a*(.6-f0*.5))+')';
+      ctx.lineWidth=m.r*(2.8-f0*1.6);
+      ctx.beginPath();
+      ctx.moveTo(m.x-tx*f0,m.y-ty*f0);
+      ctx.lineTo(m.x-tx*f1,m.y-ty*f1);
+      ctx.stroke();
+    }
+  }
+  ctx.globalCompositeOperation='source-over';
+}
+/* --- 7) ATEŞ BÖCEKLERİ --- */
+function drawFlies(t,dt,a){
+  if(!PLUG.fireflies||a<=0)return;
+  var cap=Math.round(11*PLUG.quality);
+  while(flies.length<cap)flies.push(mkFly());
+  ctx.globalCompositeOperation='lighter';ctx.lineCap='round';
+  for(var i=0;i<flies.length;i++){
+    var f=flies[i],dx=f.tx-f.x,dy=f.ty-f.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+    if(d<70){f.tx=rnd(0,W);f.ty=rnd(0,H)}
+    f.vx+=(dx/d)*f.sp*2.2*dt;f.vy+=(dy/d)*f.sp*2.2*dt;
+    f.vx*=.965;f.vy*=.965;
+    f.x+=f.vx*dt*58;f.y+=f.vy*dt*58;
+    f.trail.push(f.x,f.y);
+    if(f.trail.length>14)f.trail.splice(0,2);
+    for(var k=2;k<f.trail.length;k+=2){
+      var p=k/f.trail.length;
+      ctx.strokeStyle='rgba(255,186,110,'+(p*.28*a*(.5+.5*Math.sin(t*2.4+f.ph)))+')';
+      ctx.lineWidth=f.r*.85*p;
+      ctx.beginPath();
+      ctx.moveTo(f.trail[k-2],f.trail[k-1]);ctx.lineTo(f.trail[k],f.trail[k+1]);ctx.stroke();
+    }
+    var tw=Math.pow(Math.max(0,Math.sin(t*1.7+f.ph)),3);
+    var r=f.r*(1.6+tw*2.3)*6;
+    ctx.globalAlpha=(.28+tw*.55)*a;
+    ctx.drawImage(GLOW[0],f.x-r,f.y-r,r*2,r*2);
+    ctx.globalAlpha=1;
+  }
+  ctx.globalCompositeOperation='source-over';
+}
+/* --- 8) ANAMORPHIC LENS FLARE --- */
+function drawFlare(t,dt,a){
+  if(!PLUG.flare||a<=0)return;
+  flareNext-=dt;
+  if(flareNext<=0){
+    flareNext=rnd(7,15);
+    flare={x:rnd(W*.14,W*.86),y:rnd(H*.14,H*.72),life:0,dur:rnd(1.4,2.4)};
+  }
+  if(!flare)return;
+  flare.life+=dt;
+  if(flare.life>flare.dur){flare=null;return}
+  var p=flare.life/flare.dur, al=Math.sin(p*Math.PI)*a;
+  ctx.globalCompositeOperation='lighter';
+  var L=W*.30*(.4+p*.8);
+  ctx.globalAlpha=al*.5;
+  ctx.drawImage(GLOW[0],flare.x-L/2,flare.y-2.5,L,5);
+  ctx.globalAlpha=al*.85;
+  var r=26*(.5+al*.7);
+  ctx.drawImage(GLOW[1],flare.x-r,flare.y-r,r*2,r*2);
+  ctx.globalAlpha=al*.6;
+  ctx.strokeStyle='rgba(255,205,225,'+(al*.55)+')';ctx.lineWidth=1.2;
+  ctx.beginPath();
+  ctx.moveTo(flare.x-r*2.4,flare.y);ctx.lineTo(flare.x+r*2.4,flare.y);
+  ctx.moveTo(flare.x,flare.y-r*2.4);ctx.lineTo(flare.x,flare.y+r*2.4);
+  ctx.stroke();
+  ctx.globalAlpha=al*.25;
+  ctx.beginPath();ctx.arc(flare.x,flare.y,r*1.5,0,TAU);
+  ctx.strokeStyle='rgba(255,150,190,'+(al*.3)+')';ctx.lineWidth=1;ctx.stroke();
+  ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
+}
+/* ═══════════════════════════════════════════════════════════════════
+   ◆◆◆ EKLENTİ BLOĞU — BİTİŞ ◆◆◆
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════════════
+   DURUM
+   ═══════════════════════════════════════════════════════════ */
+var cv=document.getElementById('fx'), ctx=cv.getContext('2d',{alpha:true,desynchronized:true});
+var W=0,H=0,DPR=1,cx=0,cy=0,S=1,KK=1;
+var mx=-9999,my=-9999,active=false;
+var T=0,raf=0,last=0,introT=0,skipped=false,liveFired=false;
+var ringR=[],petals=[],stars=[],sparks=[];
+var scrollSpd=0,lastScroll=0;
+var heartA=0,starA=0,petalA=0,gardenA=0,magicA=0;
+
+function resize(){
+  W=window.innerWidth;H=window.innerHeight;DPR=Math.min(window.devicePixelRatio||1,2);
+  cv.width=Math.floor(W*DPR);cv.height=Math.floor(H*DPR);
+  cv.style.width=W+'px';cv.style.height=H+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  cx=W/2;cy=H*0.5;
+  var MD=Math.min(W,H);
+  S=(MD*0.34)/16;                       // kalp ölçeği: px/16
+  KK=clamp(MD/720,0.46,1.0);
+
+  /* kalemle çizilen kalplerin yarı genişlikleri (px) → /16 */
+  var hw=[18,32,52,80,118,168], cap=MD*0.24, i;
+  ringR=[];
+  for(i=0;i<NR;i++) ringR.push(Math.min(hw[i]*KK,cap)/16);
+
+  var pc=Math.round(clamp(W/70,10,20));
+  while(petals.length<pc)petals.push(mkPetal(W,H,true));
+  while(petals.length>pc)petals.pop();
+  for(i=0;i<petals.length;i++){petals[i].w=W;petals[i].h=H;if(petals[i].x>W)petals[i].x=rnd(0,W)}
+
+  var sc=Math.round(clamp(W/26,50,110));
+  while(stars.length<sc)stars.push(mkStar(W,H));
+  while(stars.length>sc)stars.pop();
+  for(i=0;i<stars.length;i++){if(stars[i].x>W)stars[i].x=rnd(0,W);if(stars[i].y>H)stars[i].y=rnd(0,H)}
+
+  initHearts();
+  initPlugins();
+}
+
+/* ═══════════════════════════════════════════════════════════
+   NESNELER
+   ═══════════════════════════════════════════════════════════ */
+function mkStar(w,h){return{x:rnd(0,w),y:rnd(0,h),r:rnd(.35,1.6),a:rnd(.05,.32),sp:rnd(.4,1.9),ph:rnd(0,TAU)}}
+function mkPetal(w,h,first){
+  return{x:rnd(0,w),y:first?rnd(0,h):rnd(-160,-20),s:rnd(.3,.75),
+    vy:rnd(.14,.38),sway:rnd(.7,1.5),amp:rnd(16,48),rot:rnd(0,TAU),
+    vr:rnd(-.005,.005),phase:rnd(0,TAU),pi:(Math.random()*4)|0,al:rnd(.2,.5),w:w,h:h};
+}
+function mkSpark(x,y,ang,sp,pal){
+  return{x:x,y:y,vx:Math.cos(ang)*sp,vy:Math.sin(ang)*sp,
+    life:1,dec:rnd(.9,1.8),r:rnd(.6,1.9),pal:pal,drag:rnd(.955,.982)};
+}
+
+var N=0,pt,plam,pside,psz,pph,psp,psx,psy,psd,prim,porder;
+function initHearts(){
+  N = W<760?2600:5200;
+  pt=new Float32Array(N);plam=new Float32Array(N);pside=new Float32Array(N);
+  psz=new Float32Array(N);pph=new Float32Array(N);psp=new Float32Array(N);
+  prim=new Uint8Array(N);porder=new Float32Array(N);
+  psx=new Float32Array(N);psy=new Float32Array(N);psd=new Float32Array(N);
+  for(var i=0;i<N;i++){
+    pt[i]=Math.random()*TAU;
+    if(Math.random()<.56){                 /* dış kabuk (kontur) */
+      plam[i]=0.940+0.060*Math.random();
+      prim[i]=1;  psz[i]=rnd(.64,1.16);
+    }else{                                 /* dolgu (hacim) */
+      plam[i]=Math.sqrt(Math.random())*0.93;
+      prim[i]=0;  psz[i]=rnd(.40,.88);
+    }
+    pside[i]=Math.random()<.5?-1:1;
+    pph[i]=Math.random()*TAU;psp[i]=rnd(.5,2.4);
+    /* doğum sırası: kontur ÖNCE doğar, dolgu sonra → siluet önce belirir */
+    porder[i]=Math.random()*.72+(prim[i]?0:.28);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   3B NOKTA KALBİ
+   ───────────────────────────────────────────────────────────
+   Her nokta 3B bir konumda durur:
+        X = 16sin³(t)·λ          (kontur kabuğu  λ≈1)
+        Y = [13cos t −5cos2t −2cos3t −cos4t]·λ
+        Z = ± 7.4·√(1−λ²)·bulg(t)  (arka/ön yüzey)
+
+   Renk ve parlaklık DERİNLİĞE bağlıdır:
+        arka noktalar → derin kızıl, küçük, sönük
+        ön  noktalar → neon pembe, büyük, parlak
+   Böylece döndükçe gerçek bir 3B nokta bulutu izlenimi oluşur.
+
+   `app` 0→1 iken noktalar KENDİ SIRASIYLA (porder) belirir.
+   `alive` 0→1 dönerken dönüş + nefes yavaşça devreye girer.
+   ═══════════════════════════════════════════════════════════ */
+function computeHearts(time,sk,mx,my,act,alive){
+  /* Yavaş salınım (±26°) — tam tur atmaz, kalp HER AN okunur kalır */
+  var rot=alive*(Math.sin(time*.19)*.34+Math.sin(time*.071)*.12);
+  var cr=Math.cos(rot), sr=Math.sin(rot);
+  var wob=alive*(Math.sin(time*.23)*.14), cw=Math.cos(wob), sw=Math.sin(wob);
+  var F=950, RB=1.05*S, RB2=RB*RB;
+  for(var i=0;i<N;i++){
+    var ti=pt[i], st=Math.sin(ti);
+    var rx=(16*st*st*st)*plam[i];
+    var ry=(13*Math.cos(ti)-5*Math.cos(2*ti)-2*Math.cos(3*ti)-Math.cos(4*ti)-CY)*plam[i];
+    var rz=pside[i]*7.4*Math.sqrt(Math.max(0,1-plam[i]*plam[i]))*(0.55+0.45*Math.abs(st));
+    var xr=rx*cr+rz*sr, zr=-rx*sr+rz*cr;
+    var yr=ry*cw-zr*sw,  z2=ry*sw+zr*cw;
+    var p=F/(F+z2*S);
+    var X=cx+xr*S*p*sk, Y=cy-yr*S*p*sk;
+    if(act){
+      var dx=X-mx,dy=Y-my,d2=dx*dx+dy*dy;
+      if(d2<RB2&&d2>.5){var d=Math.sqrt(d2);var k=(1-d/RB)*.55*46*p;X+=dx/d*k;Y+=dy/d*k}
+    }
+    psx[i]=X;psy[i]=Y;psd[i]=p;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   KALEMLE ÇİZİM — arkada soluk iz, önde parlayan kalem ucu
+   ═══════════════════════════════════════════════════════════ */
+function penStroke(r,prog,alpha,pulse){
+  if(prog<=0||alpha<=0||r<=0.3)return;
+  function seg(from,to){
+    var a=Math.max(0,Math.floor(from*HN)), b=Math.max(a+1,Math.floor(to*HN));
+    ctx.beginPath();
+    for(var i=a;i<=b;i++){
+      var px=cx+HP[i][0]*r, py=cy-HP[i][1]*r;
+      if(i===a)ctx.moveTo(px,py); else ctx.lineTo(px,py);
+    }
+  }
+  ctx.lineJoin='round';ctx.lineCap='round';
+
+  /* yumuşak kırmızı alt ışıma */
+  seg(0,prog);
+  ctx.lineWidth=Math.max(2.5,r*1.15);
+  ctx.strokeStyle='rgba(255,20,60,'+(alpha*0.085*pulse)+')';
+  ctx.stroke();
+
+  /* arka gövde — soluk (kalem izi) */
+  seg(0,prog*0.70);
+  ctx.lineWidth=Math.max(1,r*0.075);
+  ctx.strokeStyle='rgba(255,138,166,'+(alpha*0.26*pulse)+')';
+  ctx.stroke();
+
+  /* ön gövde — taze ve parlak */
+  seg(prog*0.70,prog);
+  ctx.lineWidth=Math.max(1,r*0.085);
+  ctx.strokeStyle='rgba(255,214,228,'+(alpha*0.80*pulse)+')';
+  ctx.stroke();
+
+  /* parlayan kalem ucu */
+  var h=Math.min(HN,Math.max(1,Math.floor(prog*HN)));
+  var hx=cx+HP[h][0]*r, hy=cy-HP[h][1]*r;
+  ctx.globalCompositeOperation='lighter';
+  var hr=Math.max(3.5,r*0.62);
+  ctx.globalAlpha=alpha*0.75*pulse;
+  ctx.drawImage(GLOW[1],hx-hr,hy-hr,hr*2,hr*2);
+  ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
+}
+
+/* ── 3B NOKTA KALBİ ──────────────────────────────────────────
+   Noktalar ayrık ayrık çizilir (birleşik bulut DEĞİL).
+   Renk ve parlaklık DERİNLİĞE bağlıdır:
+     arka noktalar → derin kızıl, küçük, sönük
+     ön  noktalar → açık pembe, büyük, parlak
+   Böylece döndükçe gerçek bir 3D nokta bulutu izlenimi oluşur.
+   `app` 0→1 iken her nokta kendi sırasında (porder) belirir.      */
+function drawHearts(time,app){
+  var SZ=S*0.23;
+  for(var i=0;i<N;i++){
+    /* — kademeli doğuş: henüz doğmamış noktalar hiç çizilmez — */
+    var prog=(app-porder[i]*0.72)/0.28;
+    if(prog<=0)continue;
+    if(prog>1)prog=1;
+    prog=eOutCubic(prog);
+
+    var p=psd[i];
+    var d=clamp((p-.62)/.42,0,1);           // ön=1 · arka=0
+    var fl=.74+.26*Math.sin(time*psp[i]+pph[i]);
+    var tw=Math.pow(Math.max(0,Math.sin(time*psp[i]*.63+pph[i]*1.7)),10);
+
+    var r=psz[i]*SZ*(0.45+d*1.05)*p*(1+tw*.55)*prog;
+    if(r<.28)continue;
+    var a=(.085+d*.42)*fl*(1+tw*.45)*(prim[i]?1.18:.90);
+    if(a>.95)a=.95;
+    ctx.globalAlpha=a*prog;
+
+    /* derinliğe göre neon renk: arka derin kızıl → ön parlak pembe */
+    var ci = d>.62?3 : d>.38?2 : d>.18?1 : 0;
+    ctx.drawImage(DOT[ci],psx[i]-r,psy[i]-r,r*2,r*2);
+  }
+  ctx.globalAlpha=1;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   ORTAM ÇİZİMLERİ
+   ═══════════════════════════════════════════════════════════ */
+function drawStars(t,a){
+  if(a<=0)return;
+  for(var i=0;i<stars.length;i++){
+    var s=stars[i],tw=.55+.45*Math.sin(t*s.sp+s.ph),o=s.a*tw*a;
+    if(o<=.01)continue;
+    ctx.beginPath();ctx.arc(s.x,s.y,s.r*tw,0,TAU);
+    ctx.fillStyle='rgba(255,236,242,'+o+')';ctx.fill();
+  }
+}
+function drawPetal(p,a){
+  if(a<=.01)return;
+  var s=p.s, w=PW*2*s, h=PH*2*s;
+  ctx.globalAlpha=a;
+  ctx.save();
+  ctx.translate(p.x,p.y);ctx.rotate(p.rot);
+  ctx.drawImage(PETS[p.pi],-w/2,-h/2,w,h);
+  ctx.restore();
+  ctx.globalAlpha=1;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   ANA DÖNGÜ
+   ═══════════════════════════════════════════════════════════ */
+function loop(now){
+  raf=requestAnimationFrame(loop);
+  var dt=(now-last)/1000; if(dt>.05)dt=.05; last=now; T+=dt;
+  if(introT<LIVE+2)introT+=dt;
+
+  ctx.globalCompositeOperation='source-over';
+  ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);
+
+  /* ═══════════════════════════════════════════════════════════
+   AÇILIŞ
+   1) boş siyah ekran
+   2) kalemle iç içe kalpler çizilir
+   3) noktalar tek tek HIZLA kalbi kurar
+   4) animasyon YAVAŞÇA devreye girer
+   ═══════════════════════════════════════════════════════════ */
+
+  /* 3) nokta kalbi kurulumu */
+  var formA=clamp((introT-T_PEN)/T_FORM,0,1);
+  /* 4) animasyon (dönüş + nefes) YAVAŞÇA devreye girer */
+  var alive=eInOutSine(clamp((introT-T_PEN-T_FORM)/T_ALIVE,0,1));
+  heartA=formA;
+
+  /* ortam katmanları (güller, yıldızlar, sis) en sona doğru açılır */
+  var env=eInOutSine(clamp((introT-T_PEN-T_FORM*0.55)/2.90,0,1));
+  starA=env*.9; petalA=env; gardenA=env; magicA=env;
+
+  /* ── 2) kalemle çizilen kalpler ── */
+  var headPrev=[0,0,0,0,0,0];
+  for(var r=0;r<NR;r++){
+    var st0=T_EMPTY+r*STEP;
+    if(introT<st0)continue;
+    var drawT=eInOutSine(clamp((introT-st0)/DRAW,0,1));
+    var rr=ringR[r];
+    var alpha=clamp((introT-st0)/.60,0,1);
+
+    if(introT>st0+DRAW){
+      /* çizim bitti: hafifçe soluklaşır */
+      var st=(introT-(st0+DRAW));
+      rr=ringR[r]*(1+Math.sin(st*.80+r*.85)*.022);
+      alpha*=.58;
+    }
+    /* nokta kalp belirirken yumuşak çapraz geçiş */
+    alpha*=(1-clamp((introT-(T_PEN-0.95))/0.95,0,1));
+
+    penStroke(rr,drawT,alpha,1+Math.sin(introT*1.5+r*.9)*.10);
+
+    /* kalemin arkasında ince kıvılcım izi */
+    var head=Math.floor(drawT*HN);
+    if(head>headPrev[r]&&introT<st0+DRAW){
+      headPrev[r]=head;
+      if(sparks.length<200 && (head%5===0)){
+        var s0=head;
+        sparks.push(mkSpark(cx+HP[s0][0]*rr, cy-HP[s0][1]*rr,
+          rnd(0,TAU), rnd(12,46), 3));
+      }
+    }
+  }
+
+  /* ── EKLENTİLER: arka katman ── */
+  drawFog(T,gardenA);
+  drawCons(T,starA);
+
+  /* ── 3+4) nokta kalbi (atış YOK, sadece dönüş + nefes) ── */
+  ctx.globalCompositeOperation='lighter';
+  var br=1+alive*(Math.sin(T*.46)*.155-.155);
+  var AR=Math.min(W,H)*.27*br;
+  var ag=ctx.createRadialGradient(cx,cy,0,cx,cy,AR);
+  var ap=(.68-alive*.13+alive*(Math.sin(T*.46)*.13))*formA;
+  ag.addColorStop(0,'rgba(255,0,51,'+(0.042*ap)+')');
+  ag.addColorStop(.45,'rgba(255,25,75,'+(0.018*ap)+')');
+  ag.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=ag;ctx.fillRect(0,0,W,H);
+
+  computeHearts(T,1,mx,my,active,alive);
+  drawHearts(T,formA);
+  ctx.globalCompositeOperation='source-over';
+
+  /* ═══ YILDIZLAR ═══ */
+  drawStars(T,starA);
+
+  /* ═══ YAĞAN GÜL YAPRAKLARI ═══ */
+  for(var j=0;j<petals.length;j++){
+    var p=petals[j];
+    p.y+=p.vy*p.s*dt*60*(1+scrollSpd*3);
+    p.x+=Math.sin(T*p.sway+p.phase)*p.amp*dt;
+    p.rot+=p.vr*dt*60;
+    if(p.y-50>H){p.y=-50;p.x=rnd(-30,W+30);p.s=rnd(.3,.75);p.pi=(Math.random()*4)|0}
+    if(p.x<-60)p.x=W+50;else if(p.x>W+60)p.x=-50;
+    drawPetal(p,p.al*petalA);
+  }
+
+  /* ═══ EKLENTİLER: ön katman ═══ */
+  drawSeeds(T,dt,gardenA);   // ışık tohumları
+  drawBuds (T,dt,gardenA);   // gül tomurcukları
+  drawEmbers(T,dt,magicA);   // korona kıvılcımları
+  drawTrails(T,dt,magicA);   // uçuşan ışık izleri
+  drawFlies (T,dt,magicA);   // ateş böcekleri
+  drawFlare (T,dt,magicA);   // anamorphic lens flare
+
+  /* ═══ KALEM KIVILCIMLARI ═══ */
+  if(sparks.length){
+    ctx.globalCompositeOperation='lighter';
+    for(var k=sparks.length-1;k>=0;k--){
+      var q=sparks[k];
+      q.vx*=q.drag;q.vy*=q.drag;
+      q.x+=q.vx*dt;q.y+=q.vy*dt;
+      q.life-=q.dec*dt; q.r*=0.985;
+      if(q.life<=0||q.r<0.2){sparks.splice(k,1);continue}
+      ctx.globalAlpha=q.life*.7;
+      ctx.drawImage(DOT[q.pal],q.x-q.r,q.y-q.r,q.r*2,q.r*2);
+    }
+    ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
+  }
+
+  /* ═══ SAYFAYI AÇ ═══ */
+  if(!liveFired&&introT>=LIVE){
+    liveFired=true;
+    document.documentElement.classList.remove('inintro');
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   GİRDİLER
+   ═══════════════════════════════════════════════════════════ */
+var glowEl=document.getElementById('glow');
+function mv(x,y){mx=x;my=y;active=true;glowEl.style.left=x+'px';glowEl.style.top=y+'px';glowEl.style.opacity=1}
+function leave(){active=false;mx=-9999;my=-9999;glowEl.style.opacity=0}
+window.addEventListener('mousemove',function(e){mv(e.clientX,e.clientY)},{passive:true});
+window.addEventListener('mouseleave',leave);
+window.addEventListener('touchstart',function(e){if(e.touches[0])mv(e.touches[0].clientX,e.touches[0].clientY)},{passive:true});
+window.addEventListener('touchmove',function(e){if(e.touches[0])mv(e.touches[0].clientX,e.touches[0].clientY)},{passive:true});
+window.addEventListener('touchend',leave,{passive:true});
+
+var rsz;window.addEventListener('resize',function(){clearTimeout(rsz);rsz=setTimeout(resize,140)},{passive:true});
+document.addEventListener('visibilitychange',function(){
+  if(document.hidden){if(raf)cancelAnimationFrame(raf);raf=0}
+  else if(!raf){last=performance.now();raf=requestAnimationFrame(loop)}
+});
+
+/* ═══════════════════════════════════════════════════════════
+   BAŞLAT
+   ═══════════════════════════════════════════════════════════ */
+var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+resize();
+
+if(reduce){
+  introT=LIVE+2.2; skipped=true;
+  ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);
+  drawFog(0,1); drawCons(0,1);
+  drawStars(0,1);
+  ctx.globalCompositeOperation='lighter';
+  computeHearts(0,1,mx,my,false);drawHearts(0,1);
+  ctx.globalCompositeOperation='source-over';
+  for(var pp=0;pp<petals.length;pp++)drawPetal(petals[pp],petals[pp].al);
+  document.documentElement.classList.remove('inintro');
+}else{
+  raf=requestAnimationFrame(function(t){last=t;raf=requestAnimationFrame(loop)});
+}
+})();
+</script>
+</body>
+</html>
